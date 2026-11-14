@@ -1,0 +1,12 @@
+Upstream SDL2 Miyoo port:
+https://github.com/steward-fu/sdl2
+
+The upstream README specifies:
+- Miyoo Mini (Plus)
+- Stock OS and Onion v4.3.1-1 support
+- mini_toolchain-v1.0
+- Docker-based build sequence: make cfg && make gpu && make sdl2
+- Runtime libraries: libSDL2-2.0.so.0, libEGL.so, libGLESv2.so, libjson-c.so.5
+- LD_LIBRARY_PATH=.:/config/lib:/customer/lib
+
+This project has not independently verified compatibility with Red Onion 4.5.0.
