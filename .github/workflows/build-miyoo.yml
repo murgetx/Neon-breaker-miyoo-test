@@ -1,0 +1,92 @@
+
+name: Build NEON BREAKER for Miyoo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget git tar zip
+
+      - name: Download Miyoo toolchain
+        run: |
+          wget -O toolchain.tar.gz https://github.com/steward-fu/website/releases/download/miyoo-mini/mini_toolchain-v1.0.tar.gz
+          mkdir -p toolchain
+          tar -xzf toolchain.tar.gz -C toolchain
+
+      - name: Get SDL2 source
+        run: |
+          git clone --depth 1 https://github.com/steward-fu/sdl2.git sdl2
+
+      - name: Build ARM version
+        run: |
+          docker build --platform linux/amd64 -t miyoo-sdl2 sdl2
+
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/sdl2:/work" \
+            -v "$PWD/toolchain/mini:/opt/mini" \
+            -v "$PWD/toolchain/prebuilt:/opt/prebuilt" \
+            -v "$PWD:/project:ro" \
+            -v "$PWD/dist:/out" \
+            -w /work miyoo-sdl2 bash -lc '
+              set -eux
+
+              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd /opt/prebuilt/arm-linux-gnueabihf/bin/ld
+              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd /opt/prebuilt/bin/arm-linux-gnueabihf-ld
+              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd /opt/prebuilt/bin/arm-linux-gnueabihf-ld.bfd
+
+              export PATH=/opt/prebuilt/arm-linux-gnueabihf/bin:/opt/prebuilt/bin:/opt/mini/bin:$PATH
+
+              make cfg
+              make gpu
+              make sdl2
+
+              mkdir -p /out
+              /opt/mini/bin/arm-linux-gnueabihf-g++ \
+                -O2 -std=c++17 \
+                -I/opt/mini/arm-buildroot-linux-gnueabihf/sysroot/usr/include/SDL2 \
+                -L/work/sdl2/build/.libs \
+                -L/work/sdl2 \
+                -L/work/swiftshader/build \
+                -o /out/neon_breaker_test \
+                /project/main.cpp \
+                -l:libSDL2-2.0.so.0 -lGLESv2 -lEGL -ljson-c
+
+              cp /work/sdl2/build/.libs/libSDL2-2.0.so.0* /out/
+              cp /work/swiftshader/build/libEGL.so /out/
+              cp /work/swiftshader/build/libGLESv2.so /out/
+              find /opt/mini -name "libjson-c.so.5*" -type f -exec cp {} /out/ \; || true
+            '
+
+      - name: Create package
+        run: |
+          cat > dist/launch.sh <<'EOF'
+          #!/bin/sh
+          cd "$(dirname "$0")"
+          export LD_LIBRARY_PATH=".:/config/lib:/customer/lib"
+          chmod +x neon_breaker_test
+          ./neon_breaker_test
+          EOF
+
+          chmod +x dist/launch.sh
+          cd dist
+          zip -r ../NEON_BREAKER_Miyoo_ARM_Test.zip .
+          cd ..
+
+      - name: Upload ARM package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEON_BREAKER_Miyoo_ARM_Test
+          path: NEON_BREAKER_Miyoo_ARM_Test.zip
