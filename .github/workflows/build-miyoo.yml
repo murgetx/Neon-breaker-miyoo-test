@@ -1,4 +1,3 @@
-
 name: Build NEON BREAKER for Miyoo
 
 on:
@@ -10,42 +9,56 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install host tools
         run: |
           sudo apt-get update
           sudo apt-get install -y wget git tar zip
 
-      - name: Download Miyoo toolchain
+      - name: Download and unpack Miyoo toolchain
+        shell: bash
         run: |
-          wget -O toolchain.tar.gz https://github.com/steward-fu/website/releases/download/miyoo-mini/mini_toolchain-v1.0.tar.gz
+          set -euxo pipefail
+          wget -O toolchain.tar.gz \
+            https://github.com/steward-fu/website/releases/download/miyoo-mini/mini_toolchain-v1.0.tar.gz
           mkdir -p toolchain
           tar -xzf toolchain.tar.gz -C toolchain
+          test -d toolchain/mini_toolchain-v1.0/mini
+          test -d toolchain/mini_toolchain-v1.0/prebuilt
+          test -x toolchain/mini_toolchain-v1.0/mini/bin/arm-linux-gnueabihf-g++
 
-      - name: Get SDL2 source
+      - name: Get Miyoo SDL2 port
         run: |
           git clone --depth 1 https://github.com/steward-fu/sdl2.git sdl2
 
-      - name: Build ARM version
+      - name: Build SDL2 and NEON BREAKER test
+        shell: bash
         run: |
+          set -euxo pipefail
+          mkdir -p dist
+
           docker build --platform linux/amd64 -t miyoo-sdl2 sdl2
 
           docker run --rm --platform linux/amd64 \
             -v "$PWD/sdl2:/work" \
-            -v "$PWD/toolchain/mini:/opt/mini" \
-            -v "$PWD/toolchain/prebuilt:/opt/prebuilt" \
+            -v "$PWD/toolchain/mini_toolchain-v1.0/mini:/opt/mini" \
+            -v "$PWD/toolchain/mini_toolchain-v1.0/prebuilt:/opt/prebuilt" \
             -v "$PWD:/project:ro" \
             -v "$PWD/dist:/out" \
             -w /work miyoo-sdl2 bash -lc '
-              set -eux
+              set -euxo pipefail
 
-              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd /opt/prebuilt/arm-linux-gnueabihf/bin/ld
-              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd /opt/prebuilt/bin/arm-linux-gnueabihf-ld
-              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd /opt/prebuilt/bin/arm-linux-gnueabihf-ld.bfd
+              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd \
+                /opt/prebuilt/arm-linux-gnueabihf/bin/ld
+              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd \
+                /opt/prebuilt/bin/arm-linux-gnueabihf-ld
+              ln -sf /opt/prebuilt/arm-linux-gnueabihf/bin/ld.bfd \
+                /opt/prebuilt/bin/arm-linux-gnueabihf-ld.bfd
 
               export PATH=/opt/prebuilt/arm-linux-gnueabihf/bin:/opt/prebuilt/bin:/opt/mini/bin:$PATH
 
@@ -53,40 +66,57 @@ jobs:
               make gpu
               make sdl2
 
-              mkdir -p /out
+              test -f /work/sdl2/build/.libs/libSDL2-2.0.so.0
+              test -f /work/swiftshader/build/libEGL.so
+              test -f /work/swiftshader/build/libGLESv2.so
+              test -f /project/main.cpp
+
               /opt/mini/bin/arm-linux-gnueabihf-g++ \
                 -O2 -std=c++17 \
                 -I/opt/mini/arm-buildroot-linux-gnueabihf/sysroot/usr/include/SDL2 \
                 -L/work/sdl2/build/.libs \
-                -L/work/sdl2 \
                 -L/work/swiftshader/build \
                 -o /out/neon_breaker_test \
                 /project/main.cpp \
                 -l:libSDL2-2.0.so.0 -lGLESv2 -lEGL -ljson-c
 
-              cp /work/sdl2/build/.libs/libSDL2-2.0.so.0* /out/
+              cp -L /work/sdl2/build/.libs/libSDL2-2.0.so.0 /out/
               cp /work/swiftshader/build/libEGL.so /out/
               cp /work/swiftshader/build/libGLESv2.so /out/
-              find /opt/mini -name "libjson-c.so.5*" -type f -exec cp {} /out/ \; || true
+
+              JSON_LIB="$(find /opt/mini/arm-buildroot-linux-gnueabihf/sysroot \
+                \( -type f -o -type l \) -name "libjson-c.so.5*" -print -quit)"
+              if [ -z "$JSON_LIB" ]; then
+                echo "libjson-c.so.5 was not found in the Miyoo toolchain sysroot."
+                exit 1
+              fi
+              cp -L "$JSON_LIB" /out/libjson-c.so.5
+
+              file /out/neon_breaker_test
             '
 
-      - name: Create package
+      - name: Create Miyoo test package
+        shell: bash
         run: |
+          set -euxo pipefail
           cat > dist/launch.sh <<'EOF'
           #!/bin/sh
           cd "$(dirname "$0")"
           export LD_LIBRARY_PATH=".:/config/lib:/customer/lib"
-          chmod +x neon_breaker_test
-          ./neon_breaker_test
+          chmod +x ./neon_breaker_test
+          exec ./neon_breaker_test
           EOF
 
           chmod +x dist/launch.sh
-          cd dist
-          zip -r ../NEON_BREAKER_Miyoo_ARM_Test.zip .
-          cd ..
+          (
+            cd dist
+            zip -r ../NEON_BREAKER_Miyoo_ARM_Test.zip .
+          )
 
-      - name: Upload ARM package
+      - name: Upload ARM test package
         uses: actions/upload-artifact@v4
         with:
           name: NEON_BREAKER_Miyoo_ARM_Test
           path: NEON_BREAKER_Miyoo_ARM_Test.zip
+          if-no-files-found: error
+          retention-days: 14
